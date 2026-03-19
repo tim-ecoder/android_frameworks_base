@@ -30,6 +30,7 @@ import com.android.systemui.qs.tiles.ReadingModeTile
 import com.android.systemui.qs.tiles.SyncTile
 import com.android.systemui.qs.tiles.UsbTetherTile
 import com.android.systemui.qs.tiles.VpnTile
+import com.android.systemui.qs.tiles.TouchKeypadTile
 import com.android.systemui.qs.tiles.base.shared.model.QSTileConfig
 import com.android.systemui.qs.tiles.base.shared.model.QSTileUIConfig
 import com.android.systemui.res.R
@@ -101,6 +102,12 @@ interface LineageModule {
     @IntoMap
     @StringKey(VpnTile.TILE_SPEC)
     fun bindVpnTile(vpnTile: VpnTile): QSTileImpl<*>
+
+    /** Inject TouchKeypadTile into tileMap in QSModule */
+    @Binds
+    @IntoMap
+    @StringKey(TouchKeypadTile.TILE_SPEC)
+    fun bindTouchKeypadTile(touchKeypadTile: TouchKeypadTile): QSTileImpl<*>
 
     companion object {
         const val AMBIENT_DISPLAY_TILE_SPEC = "ambient_display"
