@@ -85,9 +85,11 @@ import android.app.ActivityThread;
 import android.app.LoadedApk;
 import android.app.ResourcesManager;
 import android.app.WindowConfiguration;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.database.ContentObserver;
 import android.content.res.Resources;
 import android.graphics.Insets;
 import android.graphics.PixelFormat;
@@ -139,6 +141,8 @@ import com.android.internal.statusbar.LetterboxDetails;
 import com.android.internal.util.function.TriFunction;
 import com.android.internal.view.AppearanceRegion;
 import com.android.internal.widget.PointerLocationView;
+
+import lineageos.providers.LineageSettings;
 import com.android.server.LocalServices;
 import com.android.server.UiModeManagerInternal;
 import com.android.server.UiThread;
@@ -252,6 +256,7 @@ public class DisplayPolicy {
 
     private volatile boolean mHasStatusBar;
     private volatile boolean mHasNavigationBar;
+    private volatile boolean mForceNavbar;
     // Can the navigation bar ever move to the side?
     private volatile boolean mNavigationBarCanMove;
     private volatile boolean mNavigationBarAlwaysShowOnSideGesture;
@@ -411,6 +416,7 @@ public class DisplayPolicy {
     private final WindowManagerInternal.AppTransitionListener mAppTransitionListener;
 
     private final ForceShowNavBarSettingsObserver mForceShowNavBarSettingsObserver;
+    private final LineageSettingsObserver mLineageSettingsObserver;
     private boolean mForceShowNavigationBarEnabled;
 
     private class PolicyHandler extends Handler {
@@ -429,6 +435,50 @@ public class DisplayPolicy {
                     disablePointerLocation();
                     break;
             }
+        }
+    }
+
+    /**
+     * Observes LineageSettings.System.FORCE_SHOW_NAVBAR. Lineage's settings
+     * UI writes to this key; AOSP's ForceShowNavBarSettingsObserver only
+     * watches Settings.Secure.NAV_BAR_FORCE_VISIBLE, so without this observer
+     * the toggle in Settings has no effect on devices with capacitive keys.
+     * Mirrors the LOS22 downstream patch (commit 271eae234fc1).
+     */
+    private class LineageSettingsObserver extends ContentObserver {
+        LineageSettingsObserver(Handler handler) {
+            super(handler);
+        }
+
+        void register() {
+            ContentResolver resolver = mContext.getContentResolver();
+            resolver.registerContentObserver(LineageSettings.System.getUriFor(
+                    LineageSettings.System.FORCE_SHOW_NAVBAR), false, this,
+                    UserHandle.USER_ALL);
+            updateLineageSettings();
+        }
+
+        void unregister() {
+            mContext.getContentResolver().unregisterContentObserver(this);
+        }
+
+        @Override
+        public void onChange(boolean selfChange) {
+            updateLineageSettings();
+        }
+    }
+
+    private void updateLineageSettings() {
+        ContentResolver resolver = mContext.getContentResolver();
+        boolean force = LineageSettings.System.getIntForUser(resolver,
+                LineageSettings.System.FORCE_SHOW_NAVBAR, 0,
+                UserHandle.USER_CURRENT) == 1;
+        synchronized (mLock) {
+            if (mForceNavbar == force) {
+                return;
+            }
+            mForceNavbar = force;
+            updateSystemBarAttributes();
         }
     }
 
@@ -713,6 +763,9 @@ public class DisplayPolicy {
         mForceShowNavBarSettingsObserver.setOnChangeRunnable(this::updateForceShowNavBarSettings);
         mForceShowNavigationBarEnabled = mForceShowNavBarSettingsObserver.isEnabled();
         mHandler.post(mForceShowNavBarSettingsObserver::register);
+
+        mLineageSettingsObserver = new LineageSettingsObserver(mHandler);
+        mHandler.post(mLineageSettingsObserver::register);
     }
 
     private void updateForceShowNavBarSettings() {
@@ -780,7 +833,7 @@ public class DisplayPolicy {
     }
 
     public boolean hasNavigationBar() {
-        return mHasNavigationBar;
+        return mHasNavigationBar || mForceNavbar;
     }
 
     void updateHasNavigationBarIfNeeded() {
@@ -3276,6 +3329,7 @@ public class DisplayPolicy {
         mDisplayContent.mTransitionController.unregisterLegacyListener(mAppTransitionListener);
         mHandler.post(mGestureNavigationSettingsObserver::unregister);
         mHandler.post(mForceShowNavBarSettingsObserver::unregister);
+        mHandler.post(mLineageSettingsObserver::unregister);
         if (mService.mPointerLocationEnabled) {
             setPointerLocationEnabled(false);
         }

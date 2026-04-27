@@ -1785,6 +1785,15 @@ public final class PowerManagerService extends SystemService
                 "button_brightness", -1.0f, UserHandle.USER_CURRENT);
         if (btnBrightOverride >= 0) mButtonBrightness = btnBrightOverride;
 
+        // When the user has enabled the on-screen navbar, the capacitive
+        // nav-button row stops responding to taps; kill its backlight too
+        // so a dead LED row isn't left lit beneath unresponsive keys.
+        if (LineageSettings.System.getIntForUser(resolver,
+                LineageSettings.System.FORCE_SHOW_NAVBAR, 0,
+                UserHandle.USER_CURRENT) == 1) {
+            mButtonBrightness = 0f;
+        }
+
         mButtonLightOnKeypressOnly = LineageSettings.System.getIntForUser(resolver,
                 LineageSettings.System.BUTTON_BACKLIGHT_ONLY_WHEN_PRESSED,
                 0, UserHandle.USER_CURRENT) == 1;
