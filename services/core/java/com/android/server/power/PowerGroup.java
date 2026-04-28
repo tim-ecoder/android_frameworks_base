@@ -92,6 +92,13 @@ public class PowerGroup {
     private boolean mButtonOn;
     private boolean mButtonPressed;
     private long mLastButtonActivityTime;
+    /**
+     * Lineage: tracks the last EVENT_BUTTON or EVENT_OTHER user activity timestamp.
+     * Used to time-out the physical keyboard backlight independently of the
+     * capacitive nav-button row, since EVENT_TOUCH should not keep the kbd
+     * backlight lit.
+     */
+    private long mLastKbdActivityTime;
     private long mLastPowerOnTime;
     private long mLastUserActivityTime;
     private long mLastUserActivityTimeNoChangeLights;
@@ -450,6 +457,14 @@ public class PowerGroup {
 
     void setLastButtonActivityTimeLocked(long lastButtonActivityTime) {
         mLastButtonActivityTime = lastButtonActivityTime;
+    }
+
+    long getLastKbdActivityTimeLocked() {
+        return mLastKbdActivityTime;
+    }
+
+    void setLastKbdActivityTimeLocked(long lastKbdActivityTime) {
+        mLastKbdActivityTime = lastKbdActivityTime;
     }
 
     void setLastUserActivityTimeLocked(long lastUserActivityTime,

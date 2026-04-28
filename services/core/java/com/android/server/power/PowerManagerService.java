@@ -2385,6 +2385,18 @@ public final class PowerManagerService extends SystemService
                     + ", flags=0x" + Integer.toHexString(flags) + ", uid=" + uid);
         }
 
+        // Lineage: track keyboard-relevant activity (physical keys, keyboard
+        // touchpad, capacitive nav-buttons) separately from screen touches so
+        // the physical-keyboard backlight only lights up for keyboard input.
+        // Only count system-uid events (real hardware input dispatched by
+        // InputDispatcher); app-driven userActivity from MediaSession et al
+        // would otherwise prevent the kbd backlight from ever timing out.
+        if (uid == Process.SYSTEM_UID
+                && (event == PowerManager.USER_ACTIVITY_EVENT_BUTTON
+                || event == PowerManager.USER_ACTIVITY_EVENT_OTHER)) {
+            powerGroup.setLastKbdActivityTimeLocked(eventTime);
+        }
+
         if (eventTime < powerGroup.getLastSleepTimeLocked()
                 || eventTime < powerGroup.getLastWakeTimeLocked() || !mSystemReady) {
             return false;
@@ -3428,8 +3440,25 @@ public final class PowerManagerService extends SystemService
                                 if (keyboardBrightness > BRIGHTNESS_OFF_FLOAT) {
                                     keyboardBrightness *= screenBrightScale;
                                 }
-                                mKeyboardLight.setBrightness(mKeyboardVisible ?
-                                        keyboardBrightness : BRIGHTNESS_OFF_FLOAT);
+                                // Lineage: honour BUTTON_BACKLIGHT_TIMEOUT for
+                                // the physical-keyboard backlight, but tie the
+                                // timer to keyboard activity (EVENT_BUTTON /
+                                // EVENT_OTHER, set in userActivityNoUpdateLocked)
+                                // so screen touches do not keep the kbd
+                                // backlight lit.
+                                final long lastKbdActivityTimeout = mButtonTimeout +
+                                        powerGroup.getLastKbdActivityTimeLocked();
+                                if (mButtonTimeout != 0 && now > lastKbdActivityTimeout) {
+                                    mKeyboardLight.setBrightness(BRIGHTNESS_OFF_FLOAT);
+                                } else if (!mProximityPositive) {
+                                    mKeyboardLight.setBrightness(mKeyboardVisible ?
+                                            keyboardBrightness : BRIGHTNESS_OFF_FLOAT);
+                                    if (keyboardBrightness != BRIGHTNESS_OFF_FLOAT &&
+                                            mButtonTimeout != 0 &&
+                                            now + mButtonTimeout < nextTimeout) {
+                                        groupNextTimeout = now + mButtonTimeout;
+                                    }
+                                }
                             }
                         }
                     } else {
