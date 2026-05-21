@@ -3364,18 +3364,31 @@ public final class PowerManagerService extends SystemService
                     if (now < groupNextTimeout) {
                         groupUserActivitySummary = USER_ACTIVITY_SCREEN_BRIGHT;
                         if (wakefulness == WAKEFULNESS_AWAKE) {
-                            // Get current screen brightness to scale button/keyboard
-                            float screenBrightScale = 1.0f;
+                            // Inverse-LCD scaling for the *keyboard* backlight only:
+                            // dim LCD (dark env) -> full kbd; bright LCD (daylight)
+                            // -> kbd off. Nav-buttons stay at their unscaled brightness
+                            // so they remain visible in daylight too.
+                            float keyboardBrightScale = 1.0f;
                             try {
                                 int screenBrightInt = Settings.System.getIntForUser(
                                         mContext.getContentResolver(),
                                         Settings.System.SCREEN_BRIGHTNESS,
                                         255,
                                         UserHandle.USER_CURRENT);
-                                // Scale: brightness 0-255 maps to 0.1-1.0 for keys
-                                screenBrightScale = Math.max(0.1f, screenBrightInt / 255.0f);
+                                if (screenBrightInt <= 0) {
+                                    keyboardBrightScale = 0.0f;
+                                } else if (screenBrightInt <= 3) {
+                                    // Ultra-dim (darkroom): medium kbd, don't blind user
+                                    keyboardBrightScale = 120.0f / 255.0f;
+                                } else if (screenBrightInt < 50) {
+                                    // Dim/medium: full kbd
+                                    keyboardBrightScale = 1.0f;
+                                } else {
+                                    // Bright (daylight): kbd off
+                                    keyboardBrightScale = 0.0f;
+                                }
                             } catch (Exception e) {
-                                screenBrightScale = 1.0f;
+                                keyboardBrightScale = 1.0f;
                             }
 
                             if (mButtonsLight != null) {
@@ -3390,10 +3403,8 @@ public final class PowerManagerService extends SystemService
                                 } else if (isValidButtonBrightness(mButtonBrightness)) {
                                     buttonBrightness = mButtonBrightness;
                                 }
-                                // Scale button brightness with screen brightness
-                                if (buttonBrightness > BRIGHTNESS_OFF_FLOAT) {
-                                    buttonBrightness *= screenBrightScale;
-                                }
+                                // Nav-buttons: no LCD-inverse scaling — user wants them
+                                // visible in daylight too. Slider value used as-is.
 
                                 if (!mButtonLightOnKeypressOnly) {
                                     powerGroup.setLastButtonActivityTimeLocked(
@@ -3436,9 +3447,9 @@ public final class PowerManagerService extends SystemService
                                 } else if (isValidKeyboardBrightness(mKeyboardBrightness)) {
                                     keyboardBrightness = mKeyboardBrightness;
                                 }
-                                // Scale keyboard brightness with screen brightness
+                                // Scale keyboard brightness with LCD-inverse curve
                                 if (keyboardBrightness > BRIGHTNESS_OFF_FLOAT) {
-                                    keyboardBrightness *= screenBrightScale;
+                                    keyboardBrightness *= keyboardBrightScale;
                                 }
                                 // Lineage: honour BUTTON_BACKLIGHT_TIMEOUT for
                                 // the physical-keyboard backlight, but tie the
@@ -3451,8 +3462,11 @@ public final class PowerManagerService extends SystemService
                                 if (mButtonTimeout != 0 && now > lastKbdActivityTimeout) {
                                     mKeyboardLight.setBrightness(BRIGHTNESS_OFF_FLOAT);
                                 } else if (!mProximityPositive) {
-                                    mKeyboardLight.setBrightness(mKeyboardVisible ?
-                                            keyboardBrightness : BRIGHTNESS_OFF_FLOAT);
+                                    // athena keyboard is always physically present, so
+                                    // mKeyboardVisible (driven by LID switch) would gate
+                                    // the backlight off. Ignore it and drive brightness
+                                    // directly from Settings.Secure / LineageSettings.
+                                    mKeyboardLight.setBrightness(keyboardBrightness);
                                     if (keyboardBrightness != BRIGHTNESS_OFF_FLOAT &&
                                             mButtonTimeout != 0 &&
                                             now + mButtonTimeout < nextTimeout) {
