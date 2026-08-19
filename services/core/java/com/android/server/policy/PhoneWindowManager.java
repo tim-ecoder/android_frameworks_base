@@ -87,6 +87,9 @@ import static android.view.WindowManager.LayoutParams.TYPE_VOICE_INTERACTION;
 import static android.view.WindowManager.LayoutParams.TYPE_VOICE_INTERACTION_STARTING;
 import static android.view.WindowManager.LayoutParams.TYPE_WALLPAPER;
 import static android.view.WindowManager.LayoutParams.isSystemAlertWindowType;
+import static android.view.WindowManager.ScreenshotSource.SCREENSHOT_KEY_OTHER;
+import static android.view.WindowManager.TAKE_SCREENSHOT_FULLSCREEN;
+import static android.view.WindowManager.TAKE_SCREENSHOT_SELECTED_REGION;
 import static android.view.WindowManagerGlobal.ADD_OKAY;
 import static android.view.WindowManagerGlobal.ADD_PERMISSION_DENIED;
 import static android.view.contentprotection.flags.Flags.createAccessibilityOverlayAppOpEnabled;
@@ -246,6 +249,7 @@ import com.android.internal.policy.LogDecelerateInterpolator;
 import com.android.internal.policy.PhoneWindow;
 import com.android.internal.policy.TransitionAnimation;
 import com.android.internal.statusbar.IStatusBarService;
+import com.android.internal.util.ScreenshotHelper;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.server.AccessibilityManagerInternal;
 import com.android.server.DockObserverInternal;
@@ -683,7 +687,6 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     private boolean mKeyguardOccludedChanged;
 
     boolean mMenuPressed;
-    boolean mAssistPressed;
     Intent mHomeIntent;
     Intent mCarDockIntent;
     Intent mDeskDockIntent;
@@ -826,6 +829,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
 
     private boolean mLongSwipeDown;
     private CameraAvailbilityListener mCameraAvailabilityListener;
+    private ScreenshotHelper mScreenshotHelper;
 
     private class PolicyHandler extends Handler {
 
@@ -1763,6 +1767,38 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         }
     }
 
+    private void assistPress() {
+        if (!keyguardOn() && mAssistPressAction != Action.NOTHING) {
+            if (mAssistPressAction != Action.APP_SWITCH) {
+                cancelPreloadRecentApps();
+            }
+            long now = SystemClock.uptimeMillis();
+            KeyEvent event = new KeyEvent(now, now, KeyEvent.ACTION_DOWN,
+                    KeyEvent.KEYCODE_ASSIST, 0, 0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
+                    KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_KEYBOARD);
+
+            performKeyAction(mAssistPressAction, event,
+                    AssistUtils.INVOCATION_TYPE_ASSIST_BUTTON);
+        }
+    }
+
+    private void assistLongPress() {
+        if (!keyguardOn() && mAssistLongPressAction != Action.NOTHING) {
+            if (mAssistLongPressAction != Action.APP_SWITCH) {
+                cancelPreloadRecentApps();
+            }
+
+            long now = SystemClock.uptimeMillis();
+            KeyEvent event = new KeyEvent(now, now, KeyEvent.ACTION_DOWN,
+                    KeyEvent.KEYCODE_ASSIST, 0, 0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
+                    KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_KEYBOARD);
+
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS, "Assist - Long Press");
+            performKeyAction(mAssistLongPressAction, event,
+                    AssistUtils.INVOCATION_TYPE_ASSIST_BUTTON);
+        }
+    }
+
     private void sleepPress() {
         if (mShortPressOnSleepBehavior == SHORT_PRESS_SLEEP_GO_TO_SLEEP_AND_GO_HOME) {
             launchHomeFromHotKey(DEFAULT_DISPLAY, false /* awakenDreams */,
@@ -2264,7 +2300,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 notifyKeyGestureCompleted(event, KeyGestureEvent.KEY_GESTURE_TYPE_LAUNCH_ASSISTANT);
                 break;
             case VOICE_SEARCH:
-                launchVoiceAssistWithWakeLock();
+                launchVoiceAssist(mAllowStartActivityForLongPressOnPowerDuringSetup);
                 break;
             case IN_APP_SEARCH:
                 triggerVirtualKeypress(KeyEvent.KEYCODE_SEARCH);
@@ -2286,6 +2322,14 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 break;
             case PLAY_PAUSE_MUSIC:
                 triggerVirtualKeypress(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+                break;
+            case SCREENSHOT:
+                takeScreenshot(TAKE_SCREENSHOT_FULLSCREEN, SCREENSHOT_KEY_OTHER);
+                notifyKeyGestureCompleted(event, KeyGestureEvent.KEY_GESTURE_TYPE_TAKE_SCREENSHOT);
+                break;
+            case PARTIAL_SCREENSHOT:
+                takeScreenshot(TAKE_SCREENSHOT_SELECTED_REGION, SCREENSHOT_KEY_OTHER);
+                notifyKeyGestureCompleted(event, KeyGestureEvent.KEY_GESTURE_TYPE_TAKE_SCREENSHOT);
                 break;
             default:
                 break;
@@ -2582,6 +2626,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         }
 
         mHandler = new PolicyHandler(injector.getLooper());
+        mScreenshotHelper = new ScreenshotHelper(mContext);
         mWakeGestureListener = new MyWakeGestureListener(mContext, mHandler);
         mSettingsObserver = new SettingsObserver(mHandler);
         mSettingsObserver.observe();
@@ -2984,6 +3029,35 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     }
 
     /**
+     * Rule for single assist key gesture.
+     */
+    private final class AssistKeyRule extends SingleKeyGestureDetector.SingleKeyRule {
+        AssistKeyRule() {
+            super(KeyEvent.KEYCODE_ASSIST);
+        }
+
+        @Override
+        boolean supportLongPress() {
+            return mAssistLongPressAction != Action.NOTHING;
+        }
+
+        @Override
+        void onKeyGesture(@NonNull SingleKeyGestureEvent event) {
+            if (event.getAction() != ACTION_COMPLETE) {
+                return;
+            }
+            switch (event.getType()) {
+                case SINGLE_KEY_GESTURE_TYPE_PRESS:
+                    assistPress();
+                    break;
+                case SINGLE_KEY_GESTURE_TYPE_LONG_PRESS:
+                    assistLongPress();
+                    break;
+            }
+        }
+    }
+
+    /**
      * Rule for single stem primary key gesture.
      */
     private final class StemPrimaryKeyRule extends SingleKeyGestureDetector.SingleKeyRule {
@@ -3199,6 +3273,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         mSingleKeyGestureDetector.addRule(new BackKeyRule());
         mSingleKeyGestureDetector.addRule(new StylusTailButtonRule());
         mSingleKeyGestureDetector.addRule(new AppSwitchKeyRule());
+        mSingleKeyGestureDetector.addRule(new AssistKeyRule());
     }
 
     private void updateKeyAssignments() {
@@ -5433,37 +5508,18 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 break;
             }
             case KeyEvent.KEYCODE_ASSIST: {
-                if (keyguardOn()) {
-                    break;
-                }
                 if (down) {
-                    if (mAssistPressAction == Action.APP_SWITCH
-                            || mAssistLongPressAction == Action.APP_SWITCH) {
-                        preloadRecentApps();
-                    }
-                    if (event.getRepeatCount() == 0) {
-                        mAssistPressed = true;
-                    } else if (longPress) {
-                        if (mAssistLongPressAction != Action.NOTHING) {
-                            if (mAssistLongPressAction != Action.APP_SWITCH) {
-                                cancelPreloadRecentApps();
-                            }
-                            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS,
-                                    "Assist - Long Press");
-                            performKeyAction(mAssistLongPressAction, event,
-                                    AssistUtils.INVOCATION_TYPE_ASSIST_BUTTON);
-                            mAssistPressed = false;
+                    if (!interactive) {
+                        isWakeKey = mWakeOnAssistKeyPress;
+                        if (!isWakeKey) {
+                            useHapticFeedback = false;
                         }
                     }
-                } else {
-                    if (mAssistPressed) {
-                        if (mAssistPressAction != Action.APP_SWITCH) {
-                            cancelPreloadRecentApps();
-                        }
-                        mAssistPressed = false;
-                        if (!canceled) {
-                            performKeyAction(mAssistPressAction, event,
-                                    AssistUtils.INVOCATION_TYPE_ASSIST_BUTTON);
+
+                    if (!keyguardOn()) {
+                        if (mAssistPressAction == Action.APP_SWITCH
+                                || mAssistLongPressAction == Action.APP_SWITCH) {
+                            preloadRecentApps();
                         }
                     }
                 }
@@ -7769,5 +7825,9 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         public boolean isAnyCameraInUse() {
             return !mCameraInUse.isEmpty();
         }
+    }
+
+    private void takeScreenshot(int type, int source) {
+        mScreenshotHelper.takeScreenshot(type, source, mHandler, null);
     }
 }
